@@ -130,7 +130,7 @@ void checkInputLength(HeximalPair *pair){
             free(pair->second);  // freeing old memory
             pair->second = newSecond;
         }
-        
+        // free(newSecond);
     }
 
     if(isPowerOfTwo(strlen(pair->first)) != 1){
@@ -204,13 +204,18 @@ void divideIntoTwo(char *number, size_t length, char **first, char **second){
     second[0][half+1] = '\0';
 }
 
-void writeToPipe(int fd, char *number){
+void writeToPipe(int fd, char *number1, char *number2){
     FILE *input = fdopen(fd, "w");
 
-    if (fputs(number, input) == -1)
+    if (fputs(number1, input) == -1)
+        usage("cannot write to pipe");
+
+        
+    if (fputs(number2, input) == -1)
         usage("cannot write to pipe");
     
     fflush(input);
+    fclose(input);
 }
 
 void forkPipe(HeximalPair *pair){
@@ -250,6 +255,11 @@ void forkPipe(HeximalPair *pair){
             close(child_pipe[i][0]);
             close(parent_pipe[i][1]);
 
+            free(Ah);
+            free(Al);
+            free(Bh);
+            free(Bl);
+
             execlp("./intmul", "./intmul", NULL);
 
             usage("./intmul: could not execute child process.");
@@ -265,23 +275,27 @@ void forkPipe(HeximalPair *pair){
             switch (i)
             {
             case 0:
-                writeToPipe(pipe_to_write, Ah);
-                writeToPipe(pipe_to_write, Bh);
+                // writeToPipe(pipe_to_write, Ah, 1);
+                // writeToPipe(pipe_to_write, Bh, 2);
+                writeToPipe(pipe_to_write, Ah, Bh);
                 break;
             
             case 1:
-                writeToPipe(pipe_to_write, Ah);
-                writeToPipe(pipe_to_write, Bl);
+                // writeToPipe(pipe_to_write, Ah, 1 );
+                // writeToPipe(pipe_to_write, Bl, 2);
+                writeToPipe(pipe_to_write, Ah, Bl);
                 break;
 
             case 2: 
-                writeToPipe(pipe_to_write, Al);
-                writeToPipe(pipe_to_write, Bh);
+                // writeToPipe(pipe_to_write, Al, 1);
+                // writeToPipe(pipe_to_write, Bh, 2);
+                writeToPipe(pipe_to_write, Al, Bh);
                 break;
 
             case 3:
-                writeToPipe(pipe_to_write, Al);
-                writeToPipe(pipe_to_write, Bl);
+                // writeToPipe(pipe_to_write, Al, 1);
+                // writeToPipe(pipe_to_write, Bl, 2);
+                writeToPipe(pipe_to_write, Al, Bl);
                 break;
             
             default:
@@ -309,6 +323,7 @@ void appointRightNulls(char **number, int numberOfNulls){
     newNumber[strlen(*number) + numberOfNulls] = '\0';
 
     // fprintf(stdout, "new number %s\n", newNumber);
+    // free(*number);
     *number = newNumber;
 }
 
@@ -340,13 +355,16 @@ char addHexChar(char a, char b, char *overflow){
 }
 
 void addHexadecimal(char *result, char *number){
-    number = appointNulls(number, (strlen(result) - strlen(number)));
+    
+    char *newNumber = appointNulls(number, (strlen(result) - strlen(number)));
 
     char overflow = '0';
     for(int i = strlen(result) - 1; i >= 0; i--){
-        char add = addHexChar(result[i], number[i], &overflow);
+        char add = addHexChar(result[i], newNumber[i], &overflow);
         result[i] = add;
     }
+
+    free(newNumber);
 }
 
 
@@ -368,18 +386,22 @@ char* calculateResult(char *first, char *second, char *third, char *fourth, size
     return first;
 }
 
-void read_from_pipes(char *results[4])
+void read_from_pipes(char **results)
 {
     for (int i = 0; i < 4; i++)
     {
         FILE *out = fdopen(parent_pipe[i][0], "r");
         size_t lencap = 0;
         ssize_t len = 0;
-        if ((len = getline(&results[i], &lencap, out)) == -1){
+        char *tempLine = NULL;
+        if ((len = getline(&tempLine, &lencap, out)) == -1){
             usage("./intmul: failed to read from pipes.");
         }
-
+        
+        results[i] = tempLine;
         results[i][len - 1] = '\0';
+        close(parent_pipe[i][0]);
+        fclose(out);
     }
 }
 
