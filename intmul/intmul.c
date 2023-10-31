@@ -312,19 +312,37 @@ void forkPipe(HeximalPair *pair){
 }
 
 void appointRightNulls(char **number, int numberOfNulls){
-    // fprintf(stdout, "Length: %ld\n", strlen(number));
-    char *newNumber = (char*)malloc(strlen(*number) + numberOfNulls + 1);
-    // fprintf(stdout, "old number %s\n", number);
-    strcpy(newNumber, *number);
+    // // fprintf(stdout, "Length: %ld\n", strlen(number));
+    // char *newNumber = (char*)malloc(strlen(*number) + numberOfNulls + 1);
+    // // fprintf(stdout, "old number %s\n", number);
+    // strcpy(newNumber, *number);
 
-    for(int i = strlen(*number); i < strlen(*number) + numberOfNulls; i++){
-        newNumber[i] = '0';
+    // for(int i = strlen(*number); i < strlen(*number) + numberOfNulls; i++){
+    //     newNumber[i] = '0';
+    // }
+    // newNumber[strlen(*number) + numberOfNulls] = '\0';
+
+    // // fprintf(stdout, "new number %s\n", newNumber);
+    // // free(*number);
+    // *number = newNumber;
+
+    // Calculate the new length of the string
+    int newLength = strlen(*number) + numberOfNulls;
+
+    // Reallocate memory for the string, including the additional null characters
+    *number = (char *)realloc(*number, newLength + 1);
+
+    if (*number != NULL) {
+        // Fill the newly allocated space with '0' characters
+        for (int i = strlen(*number); i < newLength; i++) {
+            (*number)[i] = '0';
+        }
+        (*number)[newLength] = '\0'; // Don't forget to null-terminate the string
+    } else {
+        // Handle memory allocation failure
+        fprintf(stderr, "Memory allocation failed\n");
+        // You can choose how to handle this error in your code.
     }
-    newNumber[strlen(*number) + numberOfNulls] = '\0';
-
-    // fprintf(stdout, "new number %s\n", newNumber);
-    // free(*number);
-    *number = newNumber;
 }
 
 char addHexChar(char a, char b, char *overflow){
@@ -433,7 +451,7 @@ int main(int argc, char* argv[]){
     
     fprintf(stdout, "%s\n", result);
     
-    free(results[0]);
+    // free(results[0]);
     free(result);
 
     fflush(stdout);
