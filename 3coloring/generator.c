@@ -1,3 +1,17 @@
+/**
+ * @file generator.c
+ * @author Arslan Smajevic <e12127678@student.tuwien.ac.at>
+ * @date 22.10.2023
+ *
+ * @brief A generator program that creates 3-coloring solutions for a given graph.
+ * 
+ * @details This program will receive a graph in its synopsis, ./generator edge... whereas edge is denoted as 0-1 or 12-1.
+ *          Further on, it will color this graph with a random permutation, check for color confilicts, and remove the edges that produce the conflict.
+ *          This generator program is completely dependent on the supervisor program - meaning, it cannot be started until the supervisor has started.
+ *          More generator instances can be executed at once, but with the same graph! Otherwise, it does not really make sense.
+ *          It uses shared memory from the supervisor to write its solutions, and semaphores to ensure non-blocking and raceconditions.
+ * **/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -9,35 +23,65 @@
 #include <sys/mman.h>
 #include <sys/types.h>
 
-#define SEM_1 "/sem_1_12127678"
-#define SEM_2 "/sem_2_12127678"
+// region: SEMAPHORES
+#define SEM_1 "/sem_1_12127678" // freespace
+#define SEM_2 "/sem_2_12127678" // usedspace
 #define SEM_3 "/sem_3_12127678" // writing privileges
-#define MAX_DATA (100)
-#define SHM_NAME "/shared_12127678"
-#define NUMBER_OF_SOLUTIONS (20)
 
-char *progname;
+// region: SHARED_MEMORY
+#define MAX_DATA (100) // maximal buffer
+#define SHM_NAME "/shared_12127678" // shared memory name
+#define NUMBER_OF_SOLUTIONS (20) // maximal size of one solution
 
+// program name
+static char *progname;
+
+/**
+ * @struct edge
+ * @brief This structure represents an edge in a graph.
+ */
 typedef struct{
     int first;
     int second;
 } edge;
 
+/**
+ * @struct edgeArray
+ * @brief This structure represents an array of edges in a graph.
+ */
 typedef struct{
     edge* edges;
     size_t size;
 } edgeArray;
 
+/**
+ * @struct nodesArray
+ * @brief This structure represents a color permutation for all nodes.
+ */
 typedef struct{
     int* nodes;
     size_t size;
 } nodesArray;
 
+/**
+ * @struct solutionEdgeArr
+ * @brief This structure represents an array of edges to be written to the shared memory. edges array is limited.
+ */
 typedef struct{
     edge edges[NUMBER_OF_SOLUTIONS];
     size_t size;
 } solutionEdgeArr;
 
+/**
+ * @struct sharedMemory
+ * @brief This structure represents the shared memory object. 
+ * @details state is 1 initially. 0 will be set, when the limit is reached or the supervisor found a solution.
+ *          currentReading is the current reading element by the supervisor.
+ *          currentWriting is the current writing element by the generator.
+ *          numberOfGenerators is the number of currently running generators.
+ *          limit is the limit set by the supervisor, maximal number of solutions to be written.
+ *          edgeArray is the solutions array.
+ */
 typedef struct{
     int state;
     int currentReading;
@@ -48,9 +92,6 @@ typedef struct{
     solutionEdgeArr edgeArray[MAX_DATA];
 } sharedMemory;
 
-// edgeArray edges;
-// nodesArray nodes;
-
 /**
 * Usage function.
 * @brief Prints a message to stderr and stops the program with EXIT_FAILURE.
@@ -59,7 +100,7 @@ typedef struct{
 *
 * @param error string
 */
-void usage(char *error){
+static void usage(char *error){
     fprintf(stderr, "%s: %s\n", progname, error);
     exit(EXIT_FAILURE);
 }
@@ -74,7 +115,7 @@ void usage(char *error){
 * @param argv program arguments
 * @return edgeArray struct with edges and size of the array
 */
-edgeArray handleArguments(int argc, char **argv){
+static edgeArray handleArguments(int argc, char **argv){
 
     edgeArray result;
     result.size = argc - 1;
@@ -133,7 +174,7 @@ edgeArray handleArguments(int argc, char **argv){
 * @param size array size
 * @return 1 on present, 0 on not present
 */
-int isNumberInArray(int num, int *array, int size) {
+static int isNumberInArray(int num, int *array, int size) {
     for (int i = 0; i < size; ++i) {
         if (array[i] == num) {
             return 1;
@@ -150,7 +191,7 @@ int isNumberInArray(int num, int *array, int size) {
 * @param arr edgeArray containing all the edges
 * @return nodesArray on success, with the unique nodes; on failure memory will be freed and the program will terminate.
 */
-nodesArray separateNodes(edgeArray arr){
+static nodesArray separateNodes(edgeArray arr){
 
     nodesArray result;
 
@@ -176,7 +217,11 @@ nodesArray separateNodes(edgeArray arr){
         }
     }
 
-    result.nodes = (int *) realloc(result.nodes, count * sizeof(int));
+    if(count != 0){
+      result.nodes = (int *) realloc(result.nodes, count * sizeof(int));
+    }
+
+    // result.nodes = (int *) realloc(result.nodes, count * sizeof(int));
     result.size = count;
 
     return result;
@@ -190,13 +235,23 @@ nodesArray separateNodes(edgeArray arr){
 * @param colorArr array for the colors
 * @param nodesSize size of the array
 */
-void colorPermutation(int *colorArr, int nodesSize){
+static void colorPermutation(int *colorArr, int nodesSize){
     for(int i = 0; i < nodesSize; i++){
         colorArr[i] = rand() % 3;
     }
 }
 
-edgeArray reduceEdges(edgeArray edgesArr, nodesArray nodesArr, int *colorArr){
+/**
+* reduceEdges function.
+* @brief This function takes in the edges, the nodes and the color permutation;
+*        returning a new edgeArray with edges that caused conflicts on same color.
+*
+* @param edgesArr edges array
+* @param nodesArr nodes array
+* @param colorArr color permutation array
+* @return a new edgeArray containing the edges to be deleted for 3-coloring (do not forget cleanup!)
+*/
+static edgeArray reduceEdges(edgeArray edgesArr, nodesArray nodesArr, int *colorArr){
     edgeArray result;
 
     result.edges = (edge*) malloc(edgesArr.size * sizeof(edge));
@@ -215,68 +270,72 @@ edgeArray reduceEdges(edgeArray edgesArr, nodesArray nodesArr, int *colorArr){
             }
         }
 
-        // if(colorArr[firstColor] != colorArr[secondColor]){
-        //     result.edges[count] = edgesArr.edges[i];
-        //     count++;
-        // }
-        // else{
-        //     fprintf(stdout, "conflict on edge: %d-%d\n", edgesArr.edges[i].first, edgesArr.edges[i].second);
-        //     fprintf(stdout, "conflict: [%d: %d] [%d: %d]\n", nodesArr.nodes[firstColor], colorArr[firstColor], nodesArr.nodes[secondColor], colorArr[secondColor]);
-        // }
-
         if(colorArr[firstColor] == colorArr[secondColor]){
             result.edges[count] = edgesArr.edges[i];
             count++;
-            // fprintf(stdout, "conflict on edge: %d-%d\n", edgesArr.edges[i].first, edgesArr.edges[i].second);
-            // fprintf(stdout, "conflict: [%d: %d] [%d: %d]\n", nodesArr.nodes[firstColor], colorArr[firstColor], nodesArr.nodes[secondColor], colorArr[secondColor]);
         }
     }
 
     result.size = count;
-    result.edges = (edge *) realloc(result.edges, count * sizeof(edge));
+    if(count != 0 && count != edgesArr.size){
+        result.edges = (edge *) realloc(result.edges, count * sizeof(edge));
+    }
+    // result.edges = (edge *) realloc(result.edges, count * sizeof(edge));
 
     return result;
 }
 
-edgeArray createSolution(edgeArray edgesArr, nodesArray nodesArr){
+/**
+* createSolution function.
+* @brief This function takes in the edges and the nodes. It creates a color permutation array 
+*        and calls on reduceEdges. 
+*
+* @param edgesArr edges array
+* @param nodesArr nodes array
+* @return a new edgeArray containing the edges to be deleted for 3-coloring (do not forget cleanup!)
+*/
+static edgeArray createSolution(edgeArray edgesArr, nodesArray nodesArr){
     
     int colorArr[nodesArr.size];    
     colorPermutation(colorArr, nodesArr.size);
 
-    for(int i=0; i<nodesArr.size; i++){
-        // fprintf(stdout, "[%d: %d] ", nodesArr.nodes[i], colorArr[i]);
-    }
-    // fprintf(stdout, "\n");
-
     edgeArray reduced = reduceEdges(edgesArr, nodesArr, colorArr);
-
-    // fprintf(stdout, "\na reduction to %ld: \n", reduced.size);
-    for(size_t i = 0; i < reduced.size; i++) {
-        // fprintf(stdout, "%d-%d ", reduced.edges[i].first, reduced.edges[i].second);
-    }
-
-    // fprintf(stdout, "\n");
 
     return reduced;
 
 }
 
-void writeToSharedMemory(sharedMemory *myMemory, edgeArray solution){
+/**
+* writeToSharedMemory function.
+* @brief This function writes a solution to the shared memory. 
+* @details This function should be exclusive.
+* @param myMemory shared memory
+* @param solution solution with the edges
+*/
+static void writeToSharedMemory(sharedMemory *myMemory, edgeArray solution){
     
-    pid_t pid = getpid();
+    #ifdef DEBUG
+        pid_t pid = getpid();
+    #endif
 
-        myMemory->edgeArray[myMemory->currentWriting].size = solution.size;
-        fprintf(stdout, "[%d] Writing to [%d] in shared memory: ", pid, myMemory->currentWriting);
-        for(int i = 0; i < solution.size; i++){
+    myMemory->edgeArray[myMemory->currentWriting].size = solution.size;
+    #ifdef DEBUG
+        fprintf(stdout, "[%d] Writing to [%d] in shared memory a solution of size [%ld]: ", pid, myMemory->currentWriting, solution.size);
+    #endif
+    for(int i = 0; i < solution.size; i++){
+        #ifdef DEBUG
             fprintf(stdout, "%d-%d ", solution.edges[i].first, solution.edges[i].second);
-            myMemory->edgeArray[myMemory->currentWriting].edges[i].first = solution.edges[i].first;
-            myMemory->edgeArray[myMemory->currentWriting].edges[i].second = solution.edges[i].second;
-        }
-        fprintf(stdout, "\n");
+        #endif
+        myMemory->edgeArray[myMemory->currentWriting].edges[i].first = solution.edges[i].first;
+        myMemory->edgeArray[myMemory->currentWriting].edges[i].second = solution.edges[i].second;
+    }
+    #ifdef DEBUG
+        fprintf(stdout, "; with current limit: %d\n", myMemory->limit);
+    #endif
         
-        myMemory->currentWriting = (myMemory->currentWriting + 1) % MAX_DATA;
+    myMemory->currentWriting = (myMemory->currentWriting + 1) % MAX_DATA;
 
-        free(solution.edges);
+    free(solution.edges);
 }
 
 int main(int argc, char* argv[])
@@ -296,23 +355,85 @@ int main(int argc, char* argv[])
         usage("supervisor has not been started.");
     }
     
-    ftruncate(shmfd, sizeof(sharedMemory)); // erorr
+    if(ftruncate(shmfd, sizeof(sharedMemory)) == -1){
+        usage("error occured while truncating memory.");
+    }
     sharedMemory *myMemory;
     myMemory = mmap(NULL, sizeof(*myMemory), PROT_READ | PROT_WRITE, MAP_SHARED, shmfd, 0); // erorr
+    if(myMemory == MAP_FAILED){
+        close(shmfd);
+        usage("error occured while mapping memory.");
+    }
 
     sem_t *freespace = sem_open(SEM_1, 0);
+    if (freespace == SEM_FAILED) {
+        if (munmap(myMemory, sizeof(*myMemory)) == -1) {
+            usage("Error in munmap");
+        }
+        if (close(shmfd) == -1) {
+            usage("Error in close");
+        }
+        if (sem_close(freespace) == -1) {
+            usage("Error in sem_close for freespace");
+        }
+        usage("error on opening the freespace semaphore.");
+    }
     sem_t *usedspace = sem_open(SEM_2, 0);
+    if (usedspace == SEM_FAILED) {
+        if (munmap(myMemory, sizeof(*myMemory)) == -1) {
+            usage("Error in munmap");
+        }
+        if (close(shmfd) == -1) {
+            usage("Error in close");
+        }
+        if (sem_close(freespace) == -1) {
+            usage("Error in sem_close for freespace");
+        }
+        if (sem_close(usedspace) == -1) {
+            usage("Error in sem_close for usedspace");
+        }
+        usage("error on opening the usedspace semaphore.");
+    }
     sem_t *writeacces = sem_open(SEM_3, 0);
+    if (usedspace == SEM_FAILED) {
+        if (munmap(myMemory, sizeof(*myMemory)) == -1) {
+            usage("Error in munmap");
+        }
+        if (close(shmfd) == -1) {
+            usage("Error in close");
+        }
+        if (sem_close(freespace) == -1) {
+            usage("Error in sem_close for freespace");
+        }
+        if (sem_close(usedspace) == -1) {
+            usage("Error in sem_close for usedspace");
+        }
 
+        if (sem_close(writeacces) == -1) {
+            usage("Error in sem_close for writeacces");
+        }
+        usage("error on opening the writeacces semaphore.");
+    }
+    
     while(myMemory->state != 1){
         edgeArray solution = createSolution(edges, nodes);
-        while(solution.size > myMemory->bestSolution){
+        
+        // while(solution.size > myMemory->bestSolution){ // essentially a good approach, but timeout related
+        //     free(solution.edges);
+        //     solution = createSolution(edges, nodes);
+        // }
+
+        while(solution.size > NUMBER_OF_SOLUTIONS){
             free(solution.edges);
             solution = createSolution(edges, nodes);
         }
         
-        sem_wait(writeacces);
+        if(sem_wait(writeacces) == -1){
+            free(solution.edges);
+            break;
+        }
         if(myMemory->state == 1){
+            free(solution.edges);    
             sem_post(writeacces);
             break;
         }
@@ -321,30 +442,57 @@ int main(int argc, char* argv[])
             addedAsGenerator = 1;
             myMemory->numberOfGenerators = myMemory->numberOfGenerators + 1;
         }
-        sem_wait(freespace);
-        sleep(1);
-        if(myMemory->limit != -1){
+        if(sem_wait(freespace) == -1){
+            free(solution.edges);
+            break;
+        }
+        if(myMemory->limit != 0){
             myMemory->limit = myMemory->limit - 1;
+            writeToSharedMemory(myMemory, solution);
+	    
+        }
+        else{
+            free(solution.edges);
         }
         
-        writeToSharedMemory(myMemory, solution);
-        
-        sem_post(usedspace);
-        sem_post(writeacces);
+        if(sem_post(usedspace) == -1){
+            break;
+        }
+        if(sem_post(writeacces) == -1){
+            break;
+        }
 
         if(myMemory->limit == 0){
             break;
         }
     }
-
-    munmap(myMemory, sizeof(*myMemory));
-    shm_unlink(SHM_NAME);
-    sem_unlink(SEM_1);
-    sem_unlink(SEM_2);
-    sem_unlink(SEM_3);
     
     free(edges.edges);
     free(nodes.nodes);
+
+    // sem_wait(writeacces);
+    // myMemory->numberOfGenerators = myMemory->numberOfGenerators - 1;
+    // sem_post(writeacces);
+
+    if (munmap(myMemory, sizeof(*myMemory)) == -1) {
+        usage("Error in munmap");
+    }
+
+    if (close(shmfd) == -1) {
+        usage("Error in close");
+    }
+    
+    if (sem_close(freespace) == -1) {
+        usage("Error in sem_close for freespace");
+    }
+
+    if (sem_close(usedspace) == -1) {
+        usage("Error in sem_close for usedspace");
+    }
+
+    if (sem_close(writeacces) == -1) {
+        usage("Error in sem_close for writeacces");
+    }
 
     return 0;
 

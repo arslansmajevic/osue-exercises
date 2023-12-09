@@ -1,42 +1,34 @@
 # @file Makefile
 # @author Arslan Smajevic 12127678 <e12127678@student.tuwien.ac.at>
-# @date 13.10.2023
+# @date 22.10.2023
 #
-# @brief Makefile for vigenere
-
-# vigenere: vigenere.o
-# 	gcc vigenere.o -o vigenere
-
-# vigenere.o: vigenere.c
-# 	gcc -std=c99 -pedantic -Wall -D_DEFAULT_SOURCE -D_BSD_SOURCE -D_SVID_SOURCE -D_POSIX_C_SOURCE=200809L -g -c vigenere.c -o vigenere.o
-
-# clean: 
-# 	rm vigenere
-
-# .PHONY: all clean
-# all: vigenere
-
-# release:
-# 	tar -cvzf HW1A.tgz vigenere.c Makefile
+# @brief Makefile for generator & supervisor
 
 CC = gcc
-DEFS = -D_DEFAULT_SOURCE -D_BSD_SOURCE -D_SVID_SOURCE -D_POSIX_C_SOURCE=200809L
+# DEFS = -D_DEFAULT_SOURCE -D_BSD_SOURCE -D_SVID_SOURCE -D_POSIX_C_SOURCE=200809L -DDEBUG
+DEFS = -D_DEFAULT_SOURCE -D_BSD_SOURCE -D_SVID_SOURCE -D_POSIX_C_SOURCE=200809L 
   
 CFLAGS = -Wall -g -std=c99 -pedantic $(DEFS)
-OBJECTS = supervisor.o generator.o cleanup.o
+LDFLAGS = -pthread -lrt 
+OBJECTS = supervisor.o generator.o
 .PHONY: all clean
 
-all: supervisor generator cleanup
+all: supervisor generator
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-supervisor.o: supervisor.c
+supervisor: supervisor.o
+	$(CC) -o supervisor supervisor.o $(LDFLAGS)
+
+generator: generator.o
+	$(CC) -o generator generator.o $(LDFLAGS)
+
+supervisor.o: supervisor.c 
 generator.o: generator.c
-cleanup.o: cleanup.c
 
 clean:
-	rm -rf *.o supervisor generator cleanup
+	rm -rf *.o supervisor generator
 
 release:
-	tar -cvzf HW2.tar.gz supervisor.c generator.c Makefile
+	tar -cvzf 3coloringArslan.tar.gz supervisor.c generator.c Makefile
